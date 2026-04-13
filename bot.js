@@ -3,9 +3,10 @@ const fetch=(...a)=>import('node-fetch').then(({default:f})=>f(...a));
 const TOKEN=process.env.TOKEN;
 const CLIENT_ID=process.env.CLIENT_ID;
 const GROQ_KEY=process.env.GROQ_KEY;
-const ZSKY_KEY=process.env.ZSKY_KEY;
+const CF_TOKEN=process.env.CF_TOKEN;
+const CF_ACCOUNT_ID=process.env.CF_ACCOUNT_ID||'0ed991d019c1c9f6ebac707c39cb8a02';
 const GROQ_API='https://api.groq.com/openai/v1/chat/completions';
-const ZSKY_API='https://api.zsky.ai/v1/generate/image';
+const CF_IMAGE_MODEL='@cf/black-forest-labs/flux-1-schnell';
 const MODELS=[{id:'llama-3.1-8b-instant',label:'Llama 3.1 8B'},{id:'llama-3.3-70b-versatile',label:'Llama 3.3 70B'},{id:'openai/gpt-oss-120b',label:'GPT-OSS 120B'},{id:'meta-llama/llama-4-scout-17b-16e-instruct',label:'Llama 4 Scout'}];
 const TONES={balanced:'You are VOID AI, a premium AI assistant. Be accurate, helpful, concise. Use Discord markdown. No preamble. Keep responses short.',roast:'You are VOID AI in ROAST MODE. Savage, brutally honest. ROAST first, answer second. Keep it short.',expert:'You are VOID AI, a technical expert. Be precise, no fluff. Keep responses short.',casual:'You are VOID AI, friendly and conversational. Keep responses short.',concise:'You are VOID AI. Ultra-concise. Short answers only.'};
 const userState=new Map();
@@ -35,24 +36,16 @@ async function groqChat(state,msg){
   return reply;
 }
 
-async function generateZskyImage(prompt,style,w,h){
+async function generateCFImage(prompt,style){
   const fullPrompt=style&&style!=='none'?prompt+', '+style+' style':prompt;
-  const body={prompt:fullPrompt,width:w,height:h};
-  const headers={'Content-Type':'application/json'};
-  if(ZSKY_KEY)headers['Authorization']='Bearer '+ZSKY_KEY;
-  const res=await fetch(ZSKY_API,{method:'POST',headers,body:JSON.stringify(body)});
-  if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e.error||e.message||'zsky.ai HTTP '+res.status);}
+  const url='https://api.cloudflare.com/client/v4/accounts/'+CF_ACCOUNT_ID+'/ai/run/'+CF_IMAGE_MODEL;
+  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+CF_TOKEN},body:JSON.stringify({prompt:fullPrompt})});
+  if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error((e.errors&&e.errors[0]&&e.errors[0].message)||'CF AI HTTP '+res.status);}
+  const ct=res.headers.get('content-type')||'';
+  if(ct.includes('image')){return Buffer.from(await res.arrayBuffer());}
   const data=await res.json();
-  // zsky.ai may return { url: "..." } or { image: "base64..." } — handle both
-  if(data.url){
-    const imgRes=await fetch(data.url);
-    if(!imgRes.ok)throw new Error('Failed to fetch image from zsky.ai URL');
-    return Buffer.from(await imgRes.arrayBuffer());
-  }else if(data.image){
-    return Buffer.from(data.image,'base64');
-  }else{
-    throw new Error('Unexpected zsky.ai response format');
-  }
+  if(data.result&&data.result.image){return Buffer.from(data.result.image,'base64');}
+  throw new Error('Unexpected CF AI response format');
 }
 
 function splitText(text,max){
@@ -68,7 +61,7 @@ const commands=[
   new SlashCommandBuilder().setName('tone').setDescription('Change tone').addStringOption(o=>o.setName('tone').setDescription('Tone').setRequired(true).addChoices({name:'Balanced',value:'balanced'},{name:'Roast',value:'roast'},{name:'Expert',value:'expert'},{name:'Casual',value:'casual'},{name:'Concise',value:'concise'})),
   new SlashCommandBuilder().setName('clear').setDescription('Clear history'),
   new SlashCommandBuilder().setName('status').setDescription('Show settings'),
-  new SlashCommandBuilder().setName('image').setDescription('Generate image').addStringOption(o=>o.setName('prompt').setDescription('Describe image').setRequired(true)).addStringOption(o=>o.setName('style').setDescription('Style').addChoices({name:'Default',value:'none'},{name:'Photorealistic',value:'photorealistic'},{name:'Anime',value:'anime'},{name:'Cinematic',value:'cinematic'},{name:'Oil Painting',value:'oil painting'},{name:'Pixel Art',value:'pixel art'})).addStringOption(o=>o.setName('size').setDescription('Size').addChoices({name:'Square 1024x1024',value:'1024x1024'},{name:'Wide 1280x720',value:'1280x720'},{name:'Portrait 720x1280',value:'720x1280'})),
+  new SlashCommandBuilder().setName('image').setDescription('Generate image').addStringOption(o=>o.setName('prompt').setDescription('Describe image').setRequired(true)).addStringOption(o=>o.setName('style').setDescription('Style').addChoices({name:'Default',value:'none'},{name:'Photorealistic',value:'photorealistic'},{name:'Anime',value:'anime'},{name:'Cinematic',value:'cinematic'},{name:'Oil Painting',value:'oil painting'},{name:'Pixel Art',value:'pixel art'})),
   new SlashCommandBuilder().setName('imageedit').setDescription('Edit image with AI').addAttachmentOption(o=>o.setName('image').setDescription('Image').setRequired(true)).addStringOption(o=>o.setName('instruction').setDescription('What to do').setRequired(true)).addStringOption(o=>o.setName('style').setDescription('Style').addChoices({name:'Default',value:'none'},{name:'Photorealistic',value:'photorealistic'},{name:'Anime',value:'anime'},{name:'Cinematic',value:'cinematic'},{name:'Oil Painting',value:'oil painting'},{name:'Pixel Art',value:'pixel art'})),
 ].map(c=>c.toJSON());
 
@@ -133,12 +126,10 @@ client.on('interactionCreate',async function(interaction){
   }else if(commandName==='image'){
     const prompt=interaction.options.getString('prompt');
     const style=interaction.options.getString('style')||'none';
-    const size=interaction.options.getString('size')||'1024x1024';
-    const parts=size.split('x');const w=parseInt(parts[0]);const h=parseInt(parts[1]);
     await interaction.deferReply();
     try{
-      const buf=await generateZskyImage(prompt,style,w,h);
-      const embed=new EmbedBuilder().setColor(0xa78bfa).setAuthor({name:'VOID AI Image Generator',iconURL:client.user.displayAvatarURL()}).setDescription(prompt).setImage('attachment://void-image.png').setFooter({text:w+'x'+h+' - zsky.ai - Made by MR.PRO'});
+      const buf=await generateCFImage(prompt,style);
+      const embed=new EmbedBuilder().setColor(0xa78bfa).setAuthor({name:'VOID AI Image Generator',iconURL:client.user.displayAvatarURL()}).setDescription(prompt).setImage('attachment://void-image.png').setFooter({text:'FLUX.1 Schnell · Cloudflare Workers AI · Made by MR.PRO'});
       await interaction.editReply({embeds:[embed],files:[new AttachmentBuilder(buf,{name:'void-image.png'})]});
     }catch(err){await interaction.editReply({content:'Image failed: '+err.message});}
 
@@ -149,8 +140,8 @@ client.on('interactionCreate',async function(interaction){
     await interaction.deferReply();
     try{
       const full=(style!=='none'?instruction+', '+style+' style, high quality':instruction+', high quality')+(att&&att.url?', based on: '+att.url:'');
-      const buf=await generateZskyImage(full,'none',1024,1024);
-      const embed=new EmbedBuilder().setColor(0x00bcd4).setAuthor({name:'VOID AI Image Edit',iconURL:client.user.displayAvatarURL()}).addFields({name:'Instruction',value:instruction},{name:'Style',value:style!=='none'?style:'Default',inline:true}).setImage('attachment://void-edited.png').setFooter({text:'zsky.ai - Made by MR.PRO'});
+      const buf=await generateCFImage(full,'none');
+      const embed=new EmbedBuilder().setColor(0x00bcd4).setAuthor({name:'VOID AI Image Edit',iconURL:client.user.displayAvatarURL()}).addFields({name:'Instruction',value:instruction},{name:'Style',value:style!=='none'?style:'Default',inline:true}).setImage('attachment://void-edited.png').setFooter({text:'FLUX.1 Schnell · Cloudflare Workers AI · Made by MR.PRO'});
       await interaction.editReply({embeds:[embed],files:[new AttachmentBuilder(buf,{name:'void-edited.png'})]});
     }catch(err){await interaction.editReply({content:'Edit failed: '+err.message});}
   }
