@@ -3,7 +3,7 @@ const fetch=(...a)=>import('node-fetch').then(({default:f})=>f(...a));
 const TOKEN=process.env.TOKEN;
 const CLIENT_ID=process.env.CLIENT_ID;
 const GROQ_KEY=process.env.GROQ_KEY;
-const CF_TOKEN=process.env.CF_TOKEN;
+const CF_TOKEN=process.env.CF_TOKEN||'cfut_AoghjU8nrSo9ZbZwEtW2VZcW7yZ9eIrMOjfyvG2x6cc9481a';
 const CF_ACCOUNT_ID=process.env.CF_ACCOUNT_ID||'0ed991d019c1c9f6ebac707c39cb8a02';
 const GROQ_API='https://api.groq.com/openai/v1/chat/completions';
 const CF_IMAGE_MODEL='@cf/black-forest-labs/flux-1-schnell';
