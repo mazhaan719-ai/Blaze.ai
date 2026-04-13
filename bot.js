@@ -3,7 +3,9 @@ const fetch=(...a)=>import('node-fetch').then(({default:f})=>f(...a));
 const TOKEN=process.env.TOKEN;
 const CLIENT_ID=process.env.CLIENT_ID;
 const GROQ_KEY=process.env.GROQ_KEY;
+const ZSKY_KEY=process.env.ZSKY_KEY;
 const GROQ_API='https://api.groq.com/openai/v1/chat/completions';
+const ZSKY_API='https://api.zsky.ai/v1/generate/image';
 const MODELS=[{id:'llama-3.1-8b-instant',label:'Llama 3.1 8B'},{id:'llama-3.3-70b-versatile',label:'Llama 3.3 70B'},{id:'openai/gpt-oss-120b',label:'GPT-OSS 120B'},{id:'meta-llama/llama-4-scout-17b-16e-instruct',label:'Llama 4 Scout'}];
 const TONES={balanced:'You are VOID AI, a premium AI assistant. Be accurate, helpful, concise. Use Discord markdown. No preamble. Keep responses short.',roast:'You are VOID AI in ROAST MODE. Savage, brutally honest. ROAST first, answer second. Keep it short.',expert:'You are VOID AI, a technical expert. Be precise, no fluff. Keep responses short.',casual:'You are VOID AI, friendly and conversational. Keep responses short.',concise:'You are VOID AI. Ultra-concise. Short answers only.'};
 const userState=new Map();
@@ -33,9 +35,24 @@ async function groqChat(state,msg){
   return reply;
 }
 
-function buildImageUrl(prompt,style,w,h){
-  const full=style&&style!=='none'?prompt+', '+style+' style':prompt;
-  return'https://image.pollinations.ai/prompt/'+encodeURIComponent(full)+'?width='+w+'&height='+h+'&nologo=true&seed='+Math.floor(Math.random()*99999);
+async function generateZskyImage(prompt,style,w,h){
+  const fullPrompt=style&&style!=='none'?prompt+', '+style+' style':prompt;
+  const body={prompt:fullPrompt,width:w,height:h};
+  const headers={'Content-Type':'application/json'};
+  if(ZSKY_KEY)headers['Authorization']='Bearer '+ZSKY_KEY;
+  const res=await fetch(ZSKY_API,{method:'POST',headers,body:JSON.stringify(body)});
+  if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e.error||e.message||'zsky.ai HTTP '+res.status);}
+  const data=await res.json();
+  // zsky.ai may return { url: "..." } or { image: "base64..." } — handle both
+  if(data.url){
+    const imgRes=await fetch(data.url);
+    if(!imgRes.ok)throw new Error('Failed to fetch image from zsky.ai URL');
+    return Buffer.from(await imgRes.arrayBuffer());
+  }else if(data.image){
+    return Buffer.from(data.image,'base64');
+  }else{
+    throw new Error('Unexpected zsky.ai response format');
+  }
 }
 
 function splitText(text,max){
@@ -120,10 +137,8 @@ client.on('interactionCreate',async function(interaction){
     const parts=size.split('x');const w=parseInt(parts[0]);const h=parseInt(parts[1]);
     await interaction.deferReply();
     try{
-      const imgRes=await fetch(buildImageUrl(prompt,style,w,h));
-      if(!imgRes.ok)throw new Error('Failed '+imgRes.status);
-      const buf=Buffer.from(await imgRes.arrayBuffer());
-      const embed=new EmbedBuilder().setColor(0xa78bfa).setAuthor({name:'VOID AI Image Generator',iconURL:client.user.displayAvatarURL()}).setDescription(prompt).setImage('attachment://void-image.png').setFooter({text:w+'x'+h+' - Pollinations.ai - Made by MR.PRO'});
+      const buf=await generateZskyImage(prompt,style,w,h);
+      const embed=new EmbedBuilder().setColor(0xa78bfa).setAuthor({name:'VOID AI Image Generator',iconURL:client.user.displayAvatarURL()}).setDescription(prompt).setImage('attachment://void-image.png').setFooter({text:w+'x'+h+' - zsky.ai - Made by MR.PRO'});
       await interaction.editReply({embeds:[embed],files:[new AttachmentBuilder(buf,{name:'void-image.png'})]});
     }catch(err){await interaction.editReply({content:'Image failed: '+err.message});}
 
@@ -134,10 +149,8 @@ client.on('interactionCreate',async function(interaction){
     await interaction.deferReply();
     try{
       const full=(style!=='none'?instruction+', '+style+' style, high quality':instruction+', high quality')+(att&&att.url?', based on: '+att.url:'');
-      const imgRes=await fetch(buildImageUrl(full,'none',1024,1024));
-      if(!imgRes.ok)throw new Error('Failed '+imgRes.status);
-      const buf=Buffer.from(await imgRes.arrayBuffer());
-      const embed=new EmbedBuilder().setColor(0x00bcd4).setAuthor({name:'VOID AI Image Edit',iconURL:client.user.displayAvatarURL()}).addFields({name:'Instruction',value:instruction},{name:'Style',value:style!=='none'?style:'Default',inline:true}).setImage('attachment://void-edited.png').setFooter({text:'Made by MR.PRO'});
+      const buf=await generateZskyImage(full,'none',1024,1024);
+      const embed=new EmbedBuilder().setColor(0x00bcd4).setAuthor({name:'VOID AI Image Edit',iconURL:client.user.displayAvatarURL()}).addFields({name:'Instruction',value:instruction},{name:'Style',value:style!=='none'?style:'Default',inline:true}).setImage('attachment://void-edited.png').setFooter({text:'zsky.ai - Made by MR.PRO'});
       await interaction.editReply({embeds:[embed],files:[new AttachmentBuilder(buf,{name:'void-edited.png'})]});
     }catch(err){await interaction.editReply({content:'Edit failed: '+err.message});}
   }
